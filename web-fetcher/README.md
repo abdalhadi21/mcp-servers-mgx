@@ -6,9 +6,11 @@ A Model Context Protocol server that provides advanced web content fetching capa
 
 - **Multiple Extraction Methods**: Browser automation, HTTP requests, OCR, and document parsing
 - **Intelligent Content Scoring**: Sophisticated scoring system to select the best extraction result
-- **JavaScript Rendering**: Full browser automation with undetected Chrome driver
+- **JavaScript Rendering**: Full browser automation with Chrome driver
 - **OCR Capabilities**: Extract text from images and complex layouts using Tesseract
 - **Document Support**: Parse PDF, DOCX, and PPTX files
+- **GitHub Support**: Automatically converts GitHub URLs to raw content or API endpoints
+- **Performance Optimized**: Tries fast HTTP method first, runs others in parallel with timeouts
 - **Anti-Detection**: Stealth browser configuration to bypass basic bot detection
 
 ## Available Tools
@@ -152,3 +154,16 @@ The server gracefully handles failures by:
 - OCR processing can be CPU intensive
 - Results are not cached (implement caching if needed)
 - Parallel extraction attempts for best performance
+
+## GitHub Integration
+
+The server automatically handles GitHub URLs:
+- Converts blob URLs to raw content URLs
+- Converts tree URLs to GitHub API endpoints
+- Supports GitHub API authentication via `GITHUB_TOKEN` environment variable
+
+## Environment Variables
+
+- `MCP_TRANSPORT`: Transport mode (`stdio` or `sse`)
+- `PORT`: Server port for SSE mode (default: 3000)
+- `GITHUB_TOKEN`: Optional GitHub token for API requests

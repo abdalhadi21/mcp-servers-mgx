@@ -43,37 +43,55 @@ export class WebFetcher {
     
     console.error(`Fetching content from: ${url}`);
     
-    const results: ExtractionResult[] = [];
+    // Check if it's a GitHub URL and convert to raw content URL
+    const processedUrl = this.processGitHubUrl(url);
     
+    // Try HTTP first as it's fastest
     try {
-      const browserResult = await this.extractWithBrowser(url, timeout);
-      if (browserResult) results.push(browserResult);
-    } catch (error) {
-      console.error('Browser extraction failed:', error);
-    }
-
-    try {
-      const httpResult = await this.extractWithHttp(url);
-      if (httpResult) results.push(httpResult);
+      const httpResult = await this.extractWithHttp(processedUrl);
+      if (httpResult && httpResult.score > 50) {
+        console.error(`Fast HTTP extraction successful (score: ${httpResult.score})`);
+        return raw ? (httpResult.metadata?.rawHtml || httpResult.content) : httpResult.content;
+      }
     } catch (error) {
       console.error('HTTP extraction failed:', error);
     }
 
-    try {
-      const ocrResult = await this.extractWithOCR(url, timeout);
-      if (ocrResult) results.push(ocrResult);
-    } catch (error) {
-      console.error('OCR extraction failed:', error);
+    const results: ExtractionResult[] = [];
+    
+    // Run other methods in parallel with timeout
+    const extractionPromises = [
+      this.extractWithBrowser(processedUrl, Math.min(timeout, 15000)).catch(err => {
+        console.error('Browser extraction failed:', err);
+        return null;
+      }),
+      this.isDocumentUrl(processedUrl) ? 
+        this.extractDocument(processedUrl).catch(err => {
+          console.error('Document extraction failed:', err);
+          return null;
+        }) : null,
+    ];
+
+    // Only try OCR as last resort
+    if (results.length === 0) {
+      extractionPromises.push(
+        this.extractWithOCR(processedUrl, Math.min(timeout, 10000)).catch(err => {
+          console.error('OCR extraction failed:', err);
+          return null;
+        })
+      );
     }
 
-    if (this.isDocumentUrl(url)) {
-      try {
-        const docResult = await this.extractDocument(url);
-        if (docResult) results.push(docResult);
-      } catch (error) {
-        console.error('Document extraction failed:', error);
-      }
-    }
+    const extractionResults = await Promise.race([
+      Promise.all(extractionPromises),
+      new Promise<(ExtractionResult | null)[]>((_, reject) => 
+        setTimeout(() => reject(new Error('Extraction timeout')), timeout)
+      )
+    ]);
+
+    extractionResults.forEach(result => {
+      if (result) results.push(result);
+    });
 
     if (results.length === 0) {
       throw new Error('All extraction methods failed');
@@ -138,17 +156,49 @@ export class WebFetcher {
   }
 
   private async extractWithHttp(url: string): Promise<ExtractionResult | null> {
+    const headers: any = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.5',
+      'Accept-Encoding': 'gzip, deflate',
+      'Connection': 'keep-alive',
+    };
+
+    // Add GitHub token if available for API requests
+    if (url.includes('api.github.com') && process.env.GITHUB_TOKEN) {
+      headers['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+    }
+
     const response = await axios.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
-        'Connection': 'keep-alive',
-      },
+      headers,
       timeout: 10000,
       maxRedirects: 5,
     });
+
+    // Handle GitHub API responses
+    if (url.includes('api.github.com')) {
+      if (Array.isArray(response.data)) {
+        // Directory listing
+        const items = response.data.map((item: any) => 
+          `- [${item.name}](${item.html_url}) (${item.type})`
+        ).join('\n');
+        return {
+          content: `# Directory Contents\n\n${items}`,
+          method: 'http-api',
+          score: 80,
+          metadata: { rawHtml: JSON.stringify(response.data) }
+        };
+      } else if (response.data.content) {
+        // File content
+        const content = Buffer.from(response.data.content, 'base64').toString('utf8');
+        return {
+          content: content,
+          method: 'http-api',
+          score: 90,
+          metadata: { rawHtml: content }
+        };
+      }
+    }
 
     const $ = cheerio.load(response.data);
     
@@ -313,6 +363,28 @@ export class WebFetcher {
   private isDocumentUrl(url: string): boolean {
     const documentExtensions = ['.pdf', '.doc', '.docx', '.pptx', '.ppt'];
     return documentExtensions.some(ext => url.toLowerCase().includes(ext));
+  }
+
+  private processGitHubUrl(url: string): string {
+    // Convert GitHub blob URLs to raw content URLs
+    const githubBlobPattern = /github\.com\/([^\/]+)\/([^\/]+)\/blob\/([^\/]+)\/(.*)/;
+    const match = url.match(githubBlobPattern);
+    
+    if (match) {
+      const [, owner, repo, branch, path] = match;
+      return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`;
+    }
+    
+    // Convert GitHub tree URLs to API URLs
+    const githubTreePattern = /github\.com\/([^\/]+)\/([^\/]+)\/tree\/([^\/]+)\/(.*)/;
+    const treeMatch = url.match(githubTreePattern);
+    
+    if (treeMatch) {
+      const [, owner, repo, branch, path] = treeMatch;
+      return `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
+    }
+    
+    return url;
   }
 
   async cleanup(): Promise<void> {
