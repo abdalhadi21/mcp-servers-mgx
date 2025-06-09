@@ -5,7 +5,7 @@ import * as cheerio from 'cheerio';
 import TurndownService from 'turndown';
 import tesseract from 'node-tesseract-ocr';
 import sharp from 'sharp';
-import pdf from 'pdf-parse';
+import PDFParser from 'pdf2json';
 import mammoth from 'mammoth';
 
 export interface FetchOptions {
@@ -231,8 +231,15 @@ export class WebFetcher {
     let content = '';
     
     if (url.toLowerCase().includes('.pdf')) {
-      const data = await pdf(buffer);
-      content = data.text;
+      const pdfParser = new (PDFParser as any)(null, 1);
+      content = await new Promise((resolve, reject) => {
+        pdfParser.on('pdfParser_dataError', (errData: any) => reject(errData.parserError));
+        pdfParser.on('pdfParser_dataReady', () => {
+          const text = pdfParser.getRawTextContent();
+          resolve(text);
+        });
+        pdfParser.parseBuffer(buffer);
+      });
     } else if (url.toLowerCase().includes('.docx')) {
       const result = await mammoth.extractRawText({ buffer });
       content = result.value;
