@@ -303,31 +303,25 @@ async function runServer() {
           res.writeHead(500, { 'Content-Type': 'text/plain' });
           res.end('Internal Server Error');
         }
-      } else if (req.url === '/messages' && req.method === 'POST') {
+      } else if (req.url?.startsWith('/messages') && req.method === 'POST') {
         try {
-          let body = '';
-          req.on('data', (chunk: any) => {
-            body += chunk.toString();
-          });
+          const url = new URL(req.url, `http://${req.headers.host}`);
+          const sessionId = url.searchParams.get('sessionId');
+          const transport = transports[sessionId || ''];
           
-          req.on('end', async () => {
-            const sessionId = new URL(req.url || '', `http://${req.headers.host}`).searchParams.get('sessionId');
-            const transport = transports[sessionId || ''];
-            
-            if (transport) {
-              await transport.handlePostMessage(res, JSON.parse(body));
-            } else {
-              res.writeHead(400, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({
-                jsonrpc: '2.0',
-                error: {
-                  code: -32000,
-                  message: 'No transport found for sessionId'
-                },
-                id: null
-              }));
-            }
-          });
+          if (transport) {
+            await transport.handlePostMessage(req, res);
+          } else {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              jsonrpc: '2.0',
+              error: {
+                code: -32000,
+                message: 'No transport found for sessionId'
+              },
+              id: null
+            }));
+          }
         } catch (error) {
           console.error('Message handling error:', error);
           res.writeHead(500, { 'Content-Type': 'application/json' });
