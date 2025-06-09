@@ -272,27 +272,77 @@ async function runServer() {
   if (process.env.MCP_TRANSPORT === 'sse') {
     const port = parseInt(process.env.PORT || '3000');
     
+    // Store transports by session ID
+    const transports: Record<string, SSEServerTransport> = {};
+    
     const httpServer = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
-      if (req.url === '/sse') {
-        if (req.method === 'POST') {
-          try {
-            const transport = new SSEServerTransport("/sse", res);
-            await server.connect(transport);
-          } catch (error) {
-            console.error('SSE connection error:', error);
-            res.writeHead(500, { 'Content-Type': 'text/plain' });
-            res.end('Internal Server Error');
-          }
-        } else if (req.method === 'GET') {
-          res.writeHead(200, { 'Content-Type': 'text/plain' });
-          res.end('Sequential Thinking MCP Server - SSE Endpoint\nThis endpoint accepts POST requests for MCP SSE connections.');
-        } else {
-          res.writeHead(405, { 'Content-Type': 'text/plain' });
-          res.end('Method Not Allowed. Use POST for MCP connections or GET for info.');
+      // Add CORS headers for all requests
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+      if (req.method === 'OPTIONS') {
+        res.writeHead(200);
+        res.end();
+        return;
+      }
+
+      if (req.url === '/sse' && req.method === 'GET') {
+        try {
+          // Create SSE transport for legacy clients
+          const transport = new SSEServerTransport('/messages', res);
+          transports[transport.sessionId] = transport;
+          
+          res.on("close", () => {
+            delete transports[transport.sessionId];
+          });
+          
+          await server.connect(transport);
+        } catch (error) {
+          console.error('SSE connection error:', error);
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Internal Server Error');
+        }
+      } else if (req.url === '/messages' && req.method === 'POST') {
+        try {
+          let body = '';
+          req.on('data', (chunk) => {
+            body += chunk.toString();
+          });
+          
+          req.on('end', async () => {
+            const sessionId = new URL(req.url || '', `http://${req.headers.host}`).searchParams.get('sessionId');
+            const transport = transports[sessionId || ''];
+            
+            if (transport) {
+              await transport.handlePostMessage(req, res, JSON.parse(body));
+            } else {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                jsonrpc: '2.0',
+                error: {
+                  code: -32000,
+                  message: 'No transport found for sessionId'
+                },
+                id: null
+              }));
+            }
+          });
+        } catch (error) {
+          console.error('Message handling error:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            jsonrpc: '2.0',
+            error: {
+              code: -32603,
+              message: 'Internal server error'
+            },
+            id: null
+          }));
         }
       } else if (req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('Sequential Thinking MCP Server\nSSE endpoint: /sse');
+        res.end('Sequential Thinking MCP Server\nSSE endpoint: /sse\nMessages endpoint: /messages');
       } else {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         res.end('Not Found');

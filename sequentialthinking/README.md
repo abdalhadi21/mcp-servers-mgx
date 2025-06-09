@@ -43,7 +43,7 @@ The Sequential Thinking tool is designed for:
 
 Add this to your `claude_desktop_config.json`:
 
-#### npx
+#### Local stdio (npx)
 
 ```json
 {
@@ -59,7 +59,7 @@ Add this to your `claude_desktop_config.json`:
 }
 ```
 
-#### docker
+#### Local docker (stdio)
 
 ```json
 {
@@ -72,6 +72,19 @@ Add this to your `claude_desktop_config.json`:
         "-i",
         "mcp/sequentialthinking"
       ]
+    }
+  }
+}
+```
+
+#### Remote SSE (deployed server)
+
+```json
+{
+  "mcpServers": {
+    "sequential-thinking": {
+      "transport": "sse",
+      "url": "https://your-deployed-server.com/sse"
     }
   }
 }
@@ -129,13 +142,43 @@ For Docker installation:
 }
 ```
 
-## Building
+## Deployment
 
-Docker:
+### Local Development
 
 ```bash
-docker build -t mcp/sequentialthinking -f src/sequentialthinking/Dockerfile .
+npm install
+npm run build
+npm start
 ```
+
+### Docker Deployment
+
+Build and run locally:
+```bash
+docker build -t mcp/sequentialthinking .
+docker run -p 3000:3000 -e MCP_TRANSPORT=sse mcp/sequentialthinking
+```
+
+### Production Deployment
+
+The server supports both stdio and SSE transports:
+
+- **stdio**: For local MCP clients (default)
+- **SSE**: For remote/web deployment
+
+Set environment variables:
+- `MCP_TRANSPORT=sse` - Enable SSE transport for web deployment
+- `PORT=3000` - Server port (default: 3000)
+
+Deploy to any platform that supports Docker:
+- Railway, Render, Fly.io
+- AWS ECS/EKS, Google Cloud Run
+- Azure Container Instances
+
+Endpoints when deployed:
+- `/` - Server status and info
+- `/sse` - MCP SSE connection endpoint
 
 ## License
 
