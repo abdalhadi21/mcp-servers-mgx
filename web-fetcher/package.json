@@ -1,0 +1,34 @@
+{
+  "name": "@mcp/web-fetcher",
+  "version": "1.0.0",
+  "description": "MCP server for web content fetching with browser automation, OCR, and multiple extraction methods",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "keywords": ["mcp", "web-scraping", "browser-automation", "ocr", "content-extraction"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.5.0",
+    "selenium-webdriver": "^4.27.0",
+    "undetected-chromedriver": "^0.3.0",
+    "tesseract.js": "^5.1.1",
+    "cheerio": "^1.0.0",
+    "axios": "^1.7.7",
+    "pdf-parse": "^1.1.1",
+    "mammoth": "^1.8.0",
+    "node-tesseract-ocr": "^2.2.1",
+    "turndown": "^7.2.0",
+    "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/selenium-webdriver": "^4.1.27",
+    "@types/turndown": "^5.0.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
