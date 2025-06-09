@@ -85,11 +85,17 @@ docker run -e MCP_TRANSPORT=stdio web-fetcher
 The server supports two transport modes:
 
 1. **Stdio Transport** (default): For direct integration with MCP clients
-2. **SSE Transport**: For HTTP-based deployment, accessible at `/events` endpoint
+2. **SSE Transport**: For HTTP-based deployment, accessible at `/sse` endpoint
 
 Set transport mode using the `MCP_TRANSPORT` environment variable:
 - `stdio` - Standard input/output communication
 - `sse` - Server-Sent Events over HTTP (port configurable via `PORT` env var)
+
+### SSE Endpoints
+When running in SSE mode:
+- GET `/sse` - SSE event stream endpoint
+- POST `/messages?sessionId=...` - Message submission endpoint
+- GET `/` - Server information
 
 ## System Requirements
 

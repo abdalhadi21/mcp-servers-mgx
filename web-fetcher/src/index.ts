@@ -9,7 +9,7 @@ import {
   CallToolRequest,
 } from "@modelcontextprotocol/sdk/types.js";
 import { WebFetcher } from "./web-fetcher.js";
-import http from "http";
+import http, { IncomingMessage, ServerResponse } from "http";
 
 const server = new Server(
   {
@@ -94,13 +94,80 @@ async function main() {
   if (transport === 'sse') {
     const port = parseInt(process.env.PORT || '3000', 10);
     
-    const httpServer = http.createServer();
-    const sseTransport = new SSEServerTransport('/events', httpServer as any);
+    // Store transports by session ID
+    const transports: Record<string, SSEServerTransport> = {};
     
-    await server.connect(sseTransport);
+    const httpServer = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
+      // Add CORS headers for all requests
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+      if (req.method === 'OPTIONS') {
+        res.writeHead(200);
+        res.end();
+        return;
+      }
+
+      if (req.url === '/sse' && req.method === 'GET') {
+        try {
+          // Create SSE transport
+          const transport = new SSEServerTransport('/messages', res);
+          transports[transport.sessionId] = transport;
+          
+          res.on("close", () => {
+            delete transports[transport.sessionId];
+          });
+          
+          await server.connect(transport);
+        } catch (error) {
+          console.error('SSE connection error:', error);
+          res.writeHead(500, { 'Content-Type': 'text/plain' });
+          res.end('Internal Server Error');
+        }
+      } else if (req.url?.startsWith('/messages') && req.method === 'POST') {
+        try {
+          const url = new URL(req.url, `http://${req.headers.host}`);
+          const sessionId = url.searchParams.get('sessionId');
+          const transport = transports[sessionId || ''];
+          
+          if (transport) {
+            await transport.handlePostMessage(req, res);
+          } else {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              jsonrpc: '2.0',
+              error: {
+                code: -32000,
+                message: 'No transport found for sessionId'
+              },
+              id: null
+            }));
+          }
+        } catch (error) {
+          console.error('Message handling error:', error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            jsonrpc: '2.0',
+            error: {
+              code: -32603,
+              message: 'Internal server error'
+            },
+            id: null
+          }));
+        }
+      } else if (req.url === '/') {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('Web Fetcher MCP Server\nSSE endpoint: /sse\nMessages endpoint: /messages');
+      } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not Found');
+      }
+    });
     
     httpServer.listen(port, () => {
-      console.error(`Web Fetcher MCP server running on SSE transport at http://localhost:${port}/events`);
+      console.error(`Web Fetcher MCP server running on SSE at port ${port}`);
+      console.error(`SSE endpoint: http://localhost:${port}/sse`);
     });
   } else {
     const stdioTransport = new StdioServerTransport();
