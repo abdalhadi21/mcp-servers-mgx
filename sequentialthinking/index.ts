@@ -273,14 +273,22 @@ async function runServer() {
     const port = parseInt(process.env.PORT || '3000');
     
     const httpServer = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
-      if (req.url === '/sse' && req.method === 'POST') {
-        try {
-          const transport = new SSEServerTransport("/sse", res);
-          await server.connect(transport);
-        } catch (error) {
-          console.error('SSE connection error:', error);
-          res.writeHead(500, { 'Content-Type': 'text/plain' });
-          res.end('Internal Server Error');
+      if (req.url === '/sse') {
+        if (req.method === 'POST') {
+          try {
+            const transport = new SSEServerTransport("/sse", res);
+            await server.connect(transport);
+          } catch (error) {
+            console.error('SSE connection error:', error);
+            res.writeHead(500, { 'Content-Type': 'text/plain' });
+            res.end('Internal Server Error');
+          }
+        } else if (req.method === 'GET') {
+          res.writeHead(200, { 'Content-Type': 'text/plain' });
+          res.end('Sequential Thinking MCP Server - SSE Endpoint\nThis endpoint accepts POST requests for MCP SSE connections.');
+        } else {
+          res.writeHead(405, { 'Content-Type': 'text/plain' });
+          res.end('Method Not Allowed. Use POST for MCP connections or GET for info.');
         }
       } else if (req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
