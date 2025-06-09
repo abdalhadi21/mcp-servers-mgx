@@ -2,6 +2,8 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import http, { IncomingMessage, ServerResponse } from 'http';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -267,9 +269,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 async function runServer() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error("Sequential Thinking MCP Server running on stdio");
+  if (process.env.MCP_TRANSPORT === 'sse') {
+    const port = parseInt(process.env.PORT || '3000');
+    
+    const httpServer = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
+      if (req.url === '/sse' && req.method === 'POST') {
+        const transport = new SSEServerTransport("/sse", req);
+        await server.connect(transport);
+        await transport.handleRequest(req, res);
+      } else if (req.url === '/') {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('Sequential Thinking MCP Server\nSSE endpoint: /sse');
+      } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not Found');
+      }
+    });
+    
+    httpServer.listen(port, () => {
+      console.error(`Sequential Thinking MCP Server running on SSE at port ${port}`);
+    });
+  } else {
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+    console.error("Sequential Thinking MCP Server running on stdio");
+  }
 }
 
 runServer().catch((error) => {
