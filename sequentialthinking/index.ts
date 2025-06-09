@@ -306,7 +306,7 @@ async function runServer() {
       } else if (req.url === '/messages' && req.method === 'POST') {
         try {
           let body = '';
-          req.on('data', (chunk) => {
+          req.on('data', (chunk: any) => {
             body += chunk.toString();
           });
           
@@ -315,7 +315,7 @@ async function runServer() {
             const transport = transports[sessionId || ''];
             
             if (transport) {
-              await transport.handlePostMessage(req, res, JSON.parse(body));
+              await transport.handlePostMessage(res, JSON.parse(body));
             } else {
               res.writeHead(400, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({
