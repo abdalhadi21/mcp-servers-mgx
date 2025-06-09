@@ -95,7 +95,7 @@ async function main() {
     const port = parseInt(process.env.PORT || '3000', 10);
     
     const httpServer = http.createServer();
-    const sseTransport = new SSEServerTransport('/events', httpServer);
+    const sseTransport = new SSEServerTransport('/events', httpServer as any);
     
     await server.connect(sseTransport);
     
