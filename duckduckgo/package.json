@@ -1,21 +1,21 @@
 {
-  "name": "duckduckgo-mcp-server",
+  "name": "searxng-mcp-server",
   "version": "0.1.2",
-  "description": "A TypeScript-based MCP server that provides DuckDuckGo search functionality.",
+  "description": "A TypeScript-based MCP server that provides SearXNG search functionality.",
   "type": "module",
   "author": {
     "name": "zhsama",
     "email": "torvalds@linux.do",
     "url": "https://github.com/zhsama/duckduckgo-mcp-server"
   },
-  "homepage": "https://github.com/zhsama/duckduckgo-mcp-server",
+  "homepage": "https://github.com/zhsama/searxng-mcp-server",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zhsama/duckduckgo-mcp-server.git"
+    "url": "git+https://github.com/zhsama/searxng-mcp-server.git"
   },
   "license": "MIT",
   "bin": {
-    "duckduckgo-mcp-server": "./build/index.js"
+    "searxng-mcp-server": "./build/index.js"
   },
   "files": [
     "build"
@@ -27,8 +27,6 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "0.6.0",
-    "duck-duck-scrape": "2.2.7",
-    "node-fetch": "^3.3.2"
   },
   "devDependencies": {
     "@types/node": "^20.11.24",

@@ -7,13 +7,22 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import * as DDG from "duck-duck-scrape";
 import http, { IncomingMessage, ServerResponse } from 'http';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
 
-interface DuckDuckGoSearchArgs {
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const packageJson = JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf-8'));
+
+interface SearXNGSearchArgs {
   query: string;
   count?: number;
-  safeSearch?: "strict" | "moderate" | "off";
+  safeSearch?: "0" | "1" | "2";
+  categories?: string;
+  engines?: string;
+  lang?: string;
 }
 
 interface SearchResult {
@@ -30,32 +39,38 @@ interface RateLimit {
 interface RequestCount {
   second: number;
   month: number;
-  lastReset: number;
+  lastSecondReset: number;
+  lastMonthReset: number;
 }
 
 const CONFIG = {
   server: {
-    name: "zhsama/duckduckgo-mcp-server",
-    version: "0.1.2",
+    name: packageJson.name.replace('duckduckgo', 'searxng'),
+    version: packageJson.version,
+  },
+  searxng: {
+    baseUrl: process.env.SEARXNG_BASE_URL || 'https://search.sapti.me',
+    timeout: parseInt(process.env.SEARXNG_TIMEOUT || '10000'),
   },
   rateLimit: {
-    perSecond: 1,
-    perMonth: 15000,
+    perSecond: parseInt(process.env.RATE_LIMIT_PER_SECOND || '10'),
+    perMonth: parseInt(process.env.RATE_LIMIT_PER_MONTH || '50000'),
   } as RateLimit,
   search: {
-    maxQueryLength: 400,
-    maxResults: 20,
-    defaultResults: 10,
-    defaultSafeSearch: "moderate" as const,
+    maxQueryLength: parseInt(process.env.MAX_QUERY_LENGTH || '400'),
+    maxResults: parseInt(process.env.MAX_RESULTS || '20'),
+    defaultResults: parseInt(process.env.DEFAULT_RESULTS || '10'),
+    defaultSafeSearch: (process.env.DEFAULT_SAFE_SEARCH || '1') as '0' | '1' | '2',
+    defaultCategories: process.env.DEFAULT_CATEGORIES || 'general',
   },
 } as const;
 
 const WEB_SEARCH_TOOL = {
-  name: "duckduckgo_web_search",
+  name: "searxng_web_search",
   description:
-    "Performs a web search using the DuckDuckGo, ideal for general queries, news, articles, and online content. " +
+    "Performs a web search using SearXNG, ideal for general queries, news, articles, and online content. " +
     "Use this for broad information gathering, recent events, or when you need diverse web sources. " +
-    "Supports content filtering and region-specific searches. " +
+    "Supports content filtering, multiple search engines, and region-specific searches. " +
     `Maximum ${CONFIG.search.maxResults} results per request.`,
   inputSchema: {
     type: "object",
@@ -74,9 +89,22 @@ const WEB_SEARCH_TOOL = {
       },
       safeSearch: {
         type: "string",
-        description: "SafeSearch level (strict, moderate, off)",
-        enum: ["strict", "moderate", "off"],
+        description: "SafeSearch level (0=off, 1=moderate, 2=strict)",
+        enum: ["0", "1", "2"],
         default: CONFIG.search.defaultSafeSearch,
+      },
+      categories: {
+        type: "string",
+        description: "Search categories (general, images, videos, news, music, files, etc.)",
+        default: CONFIG.search.defaultCategories,
+      },
+      engines: {
+        type: "string",
+        description: "Comma-separated list of search engines to use",
+      },
+      lang: {
+        type: "string",
+        description: "Language code (e.g., en, fr, de)",
       },
     },
     required: ["query"],
@@ -99,7 +127,8 @@ const server = new Server(
 let requestCount: RequestCount = {
   second: 0,
   month: 0,
-  lastReset: Date.now(),
+  lastSecondReset: Date.now(),
+  lastMonthReset: Date.now(),
 };
 
 /**
@@ -110,20 +139,25 @@ function checkRateLimit(): void {
   const now = Date.now();
   console.error(`[DEBUG] Rate limit check - Current counts:`, requestCount);
 
-  // 重置每秒计数器
-  if (now - requestCount.lastReset > 1000) {
+  // 重置每秒计数器 (1秒 = 1000毫秒)
+  if (now - requestCount.lastSecondReset > 1000) {
     requestCount.second = 0;
-    requestCount.lastReset = now;
+    requestCount.lastSecondReset = now;
+  }
+
+  // 重置每月计数器 (30天 = 30 * 24 * 60 * 60 * 1000毫秒)
+  const monthInMs = 30 * 24 * 60 * 60 * 1000;
+  if (now - requestCount.lastMonthReset > monthInMs) {
+    requestCount.month = 0;
+    requestCount.lastMonthReset = now;
   }
 
   // 检查限制
-  if (
-    requestCount.second >= CONFIG.rateLimit.perSecond ||
-    requestCount.month >= CONFIG.rateLimit.perMonth
-  ) {
-    const error = new Error("Rate limit exceeded");
-    console.error("[ERROR] Rate limit exceeded:", requestCount);
-    throw error;
+  if (requestCount.second >= CONFIG.rateLimit.perSecond) {
+    throw new Error(`Rate limit exceeded: ${requestCount.second}/${CONFIG.rateLimit.perSecond} per second`);
+  }
+  if (requestCount.month >= CONFIG.rateLimit.perMonth) {
+    throw new Error(`Rate limit exceeded: ${requestCount.month}/${CONFIG.rateLimit.perMonth} per month`);
   }
 
   // 更新计数器
@@ -132,79 +166,162 @@ function checkRateLimit(): void {
 }
 
 /**
- * 类型守卫：检查参数是否符合 DuckDuckGoSearchArgs 接口
+ * 验证和清理搜索参数
  */
-function isDuckDuckGoWebSearchArgs(
-  args: unknown
-): args is DuckDuckGoSearchArgs {
+function validateAndSanitizeArgs(args: unknown): SearXNGSearchArgs {
   if (typeof args !== "object" || args === null) {
-    return false;
+    throw new Error("Invalid arguments: must be an object");
   }
 
-  const { query } = args as Partial<DuckDuckGoSearchArgs>;
+  const { query, count, safeSearch, categories, engines, lang } = args as Partial<SearXNGSearchArgs>;
 
+  // 验证 query
   if (typeof query !== "string") {
-    return false;
+    throw new Error("Query must be a string");
   }
-
+  if (query.trim().length === 0) {
+    throw new Error("Query cannot be empty");
+  }
   if (query.length > CONFIG.search.maxQueryLength) {
-    return false;
+    throw new Error(`Query too long (max ${CONFIG.search.maxQueryLength} characters)`);
   }
 
-  return true;
+  // 验证 count
+  let validCount = CONFIG.search.defaultResults;
+  if (count !== undefined) {
+    if (typeof count !== "number" || !Number.isInteger(count)) {
+      throw new Error("Count must be an integer");
+    }
+    if (count < 1 || count > CONFIG.search.maxResults) {
+      throw new Error(`Count must be between 1 and ${CONFIG.search.maxResults}`);
+    }
+    validCount = count;
+  }
+
+  // 验证 safeSearch
+  let validSafeSearch = CONFIG.search.defaultSafeSearch;
+  if (safeSearch !== undefined) {
+    if (!['0', '1', '2'].includes(safeSearch)) {
+      throw new Error("SafeSearch must be '0' (off), '1' (moderate), or '2' (strict)");
+    }
+    validSafeSearch = safeSearch;
+  }
+
+  // 验证可选参数
+  let validCategories = CONFIG.search.defaultCategories;
+  if (categories !== undefined) {
+    if (typeof categories !== "string") {
+      throw new Error("Categories must be a string");
+    }
+    validCategories = categories.trim();
+  }
+
+  let validEngines: string | undefined;
+  if (engines !== undefined) {
+    if (typeof engines !== "string") {
+      throw new Error("Engines must be a string");
+    }
+    validEngines = engines.trim();
+  }
+
+  let validLang: string | undefined;
+  if (lang !== undefined) {
+    if (typeof lang !== "string") {
+      throw new Error("Language must be a string");
+    }
+    validLang = lang.trim();
+  }
+
+  return {
+    query: query.trim(),
+    count: validCount,
+    safeSearch: validSafeSearch,
+    categories: validCategories,
+    engines: validEngines,
+    lang: validLang,
+  };
 }
 
+
 /**
- * 执行网络搜索
- * @param query 搜索查询
- * @param count 结果数量
- * @param safeSearch 安全搜索级别
+ * 执行 SearXNG 网络搜索
+ * @param searchArgs 搜索参数
  * @returns 格式化的搜索结果
  */
-async function performWebSearch(
-  query: string,
-  count: number = CONFIG.search.defaultResults,
-  safeSearch: "strict" | "moderate" | "off" = CONFIG.search.defaultSafeSearch
-): Promise<string> {
+async function performWebSearch(searchArgs: SearXNGSearchArgs): Promise<string> {
   console.error(
-    `[DEBUG] Performing search - Query: "${query}", Count: ${count}, SafeSearch: ${safeSearch}`
+    `[DEBUG] Performing SearXNG search - Query: "${searchArgs.query}", Count: ${searchArgs.count}`
   );
 
   try {
     checkRateLimit();
 
-    const safeSearchMap = {
-      strict: DDG.SafeSearchType.STRICT,
-      moderate: DDG.SafeSearchType.MODERATE,
-      off: DDG.SafeSearchType.OFF,
-    };
-
-    const searchResults = await DDG.search(query, {
-      safeSearch: safeSearchMap[safeSearch],
-    });
-
-    if (searchResults.noResults) {
-      console.error(`[INFO] No results found for query: "${query}"`);
-      return `# DuckDuckGo 搜索结果\n没有找到与 "${query}" 相关的结果。`;
+    // 构建 SearXNG API URL
+    const searchUrl = new URL('/search', CONFIG.searxng.baseUrl);
+    searchUrl.searchParams.set('q', searchArgs.query);
+    searchUrl.searchParams.set('format', 'json');
+    searchUrl.searchParams.set('safesearch', searchArgs.safeSearch || CONFIG.search.defaultSafeSearch);
+    searchUrl.searchParams.set('categories', searchArgs.categories || CONFIG.search.defaultCategories);
+    
+    if (searchArgs.engines) {
+      searchUrl.searchParams.set('engines', searchArgs.engines);
+    }
+    
+    if (searchArgs.lang) {
+      searchUrl.searchParams.set('lang', searchArgs.lang);
     }
 
-    const results: SearchResult[] = searchResults.results
-      .slice(0, count)
-      .map((result: DDG.SearchResult) => ({
-        title: result.title,
-        description: result.description || result.title,
+    console.error(`[DEBUG] SearXNG URL: ${searchUrl.toString()}`);
+
+    // 调用 SearXNG API
+    const response = await fetch(searchUrl.toString(), {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'SearXNG-MCP-Server/1.0',
+        'Accept': 'application/json',
+      },
+      signal: AbortSignal.timeout(CONFIG.searxng.timeout),
+    });
+
+    if (!response.ok) {
+      throw new Error(`SearXNG API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    if (!data.results || !Array.isArray(data.results)) {
+      console.error(`[INFO] No results found for query: "${searchArgs.query}"`);
+      return `# SearXNG Search Results\nNo results found for "${searchArgs.query}".`;
+    }
+
+    // 限制结果数量
+    const results: SearchResult[] = data.results
+      .slice(0, searchArgs.count || CONFIG.search.defaultResults)
+      .map((result: any) => ({
+        title: result.title || 'No title',
+        description: result.content || result.title || 'No description',
         url: result.url,
       }));
 
     console.error(
-      `[INFO] Found ${results.length} results for query: "${query}"`
+      `[INFO] Found ${results.length} results for query: "${searchArgs.query}"`
     );
 
-    // 格式化结果
-    return formatSearchResults(query, results);
+    return formatSearchResults(searchArgs.query, results);
   } catch (error) {
-    console.error(`[ERROR] Search failed - Query: "${query}"`, error);
-    throw error;
+    if (error instanceof Error) {
+      if (error.message.includes('Rate limit')) {
+        throw new Error('Search rate limit exceeded. Please try again later.');
+      }
+      if (error.message.includes('timeout') || error.message.includes('fetch')) {
+        throw new Error('SearXNG service temporarily unavailable. Please try again.');
+      }
+      if (error.message.includes('SearXNG API error')) {
+        throw new Error('SearXNG service error. Please check the service configuration.');
+      }
+    }
+    console.error(`[ERROR] SearXNG search failed - Query: "${searchArgs.query}"`, error);
+    throw new Error('Search failed due to an internal error.');
   }
 }
 
@@ -214,16 +331,22 @@ async function performWebSearch(
 function formatSearchResults(query: string, results: SearchResult[]): string {
   const formattedResults = results
     .map((r: SearchResult) => {
-      return `### ${r.title}
-${r.description}
+      // 输出中防止 Markdown 注入
+      const safeTitle = r.title.replace(/[\[\]]/g, '');
+      const safeDescription = r.description.replace(/[\[\]]/g, '');
+      const safeUrl = r.url;
+      
+      return `### ${safeTitle}
+${safeDescription}
 
-🔗 [阅读更多](${r.url})
+🔗 [Read more](${safeUrl})
 `;
     })
     .join("\n\n");
 
-  return `# DuckDuckGo 搜索结果
-${query} 的搜索结果（${results.length}件）
+  const safeQuery = query.replace(/[\[\]]/g, '');
+  return `# SearXNG Search Results
+Search results for "${safeQuery}" (${results.length} results)
 
 ---
 
@@ -239,38 +362,48 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
   try {
     console.error(
-      `[DEBUG] Received tool call request:`,
-      JSON.stringify(request.params, null, 2)
+      `[DEBUG] Received tool call request for tool: ${request.params?.name}`
     );
 
     const { name, arguments: args } = request.params;
 
+    if (!name) {
+      return {
+        content: [{ type: "text", text: "Tool name is required" }],
+        isError: true,
+      };
+    }
+
     if (!args) {
-      throw new Error("No arguments provided");
+      return {
+        content: [{ type: "text", text: "Tool arguments are required" }],
+        isError: true,
+      };
     }
 
     switch (name) {
-      case "duckduckgo_web_search": {
-        if (!isDuckDuckGoWebSearchArgs(args)) {
-          throw new Error("Invalid arguments for duckduckgo_web_search");
+      case "searxng_web_search": {
+        try {
+          const validatedArgs = validateAndSanitizeArgs(args);
+          const results = await performWebSearch(validatedArgs);
+
+          return {
+            content: [{ type: "text", text: results }],
+            isError: false,
+          };
+        } catch (validationError) {
+          return {
+            content: [{ 
+              type: "text", 
+              text: validationError instanceof Error ? validationError.message : "Invalid search parameters" 
+            }],
+            isError: true,
+          };
         }
-
-        const {
-          query,
-          count = CONFIG.search.defaultResults,
-          safeSearch = CONFIG.search.defaultSafeSearch,
-        } = args;
-        const results = await performWebSearch(query, count, safeSearch);
-
-        return {
-          content: [{ type: "text", text: results }],
-          isError: false,
-        };
       }
       default: {
-        console.error(`[ERROR] Unknown tool requested: ${name}`);
         return {
-          content: [{ type: "text", text: `Unknown tool: ${name}` }],
+          content: [{ type: "text", text: `Tool '${name}' is not supported` }],
           isError: true,
         };
       }
@@ -281,9 +414,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
       content: [
         {
           type: "text",
-          text: `Error: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          text: "An internal error occurred while processing your request",
         },
       ],
       isError: true,
@@ -362,7 +493,7 @@ async function runServer() {
         }
       } else if (req.url === '/') {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('DuckDuckGo Search MCP Server\nSSE endpoint: /sse\nMessages endpoint: /messages');
+        res.end('SearXNG Search MCP Server\nSSE endpoint: /sse\nMessages endpoint: /messages');
       } else {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         res.end('Not Found');
@@ -370,12 +501,12 @@ async function runServer() {
     });
     
     httpServer.listen(port, () => {
-      console.error(`DuckDuckGo Search MCP Server running on SSE at port ${port}`);
+      console.error(`SearXNG Search MCP Server running on SSE at port ${port}`);
     });
   } else {
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    console.error("DuckDuckGo Search MCP Server running on stdio");
+    console.error("SearXNG Search MCP Server running on stdio");
   }
 }
 
