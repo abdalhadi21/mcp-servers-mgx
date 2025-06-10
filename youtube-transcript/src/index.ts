@@ -92,20 +92,29 @@ class YouTubeTranscriptExtractor {
    * Retrieves transcript for a given video ID and language
    */
   async getTranscript(videoId: string, lang: string): Promise<string> {
-    try {
-      const transcript = await getSubtitles({
-        videoID: videoId,
-        lang: lang,
-      });
+    const languagesToTry = [lang, 'en', 'auto'];
+    
+    for (const langCode of languagesToTry) {
+      try {
+        console.error(`Trying language: ${langCode}`);
+        const transcript = await getSubtitles({
+          videoID: videoId,
+          lang: langCode,
+        });
 
-      return this.formatTranscript(transcript);
-    } catch (error) {
-      console.error('Failed to fetch transcript:', error);
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Failed to retrieve transcript: ${(error as Error).message}`
-      );
+        if (transcript && transcript.length > 0) {
+          return this.formatTranscript(transcript);
+        }
+      } catch (error) {
+        console.error(`Failed to fetch transcript for ${langCode}:`, error);
+        // Continue to next language
+      }
     }
+    
+    throw new McpError(
+      ErrorCode.InternalError,
+      `Could not find captions for video: ${videoId}. Tried languages: ${languagesToTry.join(', ')}`
+    );
   }
 
   /**
