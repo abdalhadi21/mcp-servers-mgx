@@ -21,7 +21,7 @@
     "watch": "tsc --watch"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "0.6.0",
+    "@modelcontextprotocol/sdk": "1.12.1",
     "mcp-evals": "^1.0.18",
     "youtube-captions-scraper": "^2.0.3"
   },

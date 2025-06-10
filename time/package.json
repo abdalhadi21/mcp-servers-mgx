@@ -72,7 +72,7 @@
     "typescript-eslint": "^7.0.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.7.0",
+    "@modelcontextprotocol/sdk": "1.12.1",
     "dayjs": "^1.11.13"
   }
 }

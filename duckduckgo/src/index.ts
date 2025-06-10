@@ -49,12 +49,12 @@ const CONFIG = {
     version: packageJson.version,
   },
   searxng: {
-    baseUrl: process.env.SEARXNG_BASE_URL || 'https://search.sapti.me',
-    timeout: parseInt(process.env.SEARXNG_TIMEOUT || '10000'),
+    baseUrl: process.env.SEARXNG_BASE_URL || 'https://searxng-web-mgx.selfstack.space',
+    timeout: parseInt(process.env.SEARXNG_TIMEOUT || '15000'),
   },
   rateLimit: {
-    perSecond: parseInt(process.env.RATE_LIMIT_PER_SECOND || '10'),
-    perMonth: parseInt(process.env.RATE_LIMIT_PER_MONTH || '50000'),
+    perSecond: parseInt(process.env.RATE_LIMIT_PER_SECOND || '5'),
+    perMonth: parseInt(process.env.RATE_LIMIT_PER_MONTH || '200000'),
   } as RateLimit,
   search: {
     maxQueryLength: parseInt(process.env.MAX_QUERY_LENGTH || '400'),
@@ -279,12 +279,24 @@ async function performWebSearch(searchArgs: SearXNGSearchArgs): Promise<string> 
       headers: {
         'User-Agent': 'SearXNG-MCP-Server/1.0',
         'Accept': 'application/json',
+        'Accept-Language': 'en-US,en;q=0.9',
       },
       signal: AbortSignal.timeout(CONFIG.searxng.timeout),
     });
 
     if (!response.ok) {
-      throw new Error(`SearXNG API error: ${response.status} ${response.statusText}`);
+      const errorText = await response.text().catch(() => 'Unknown error');
+      console.error(`[ERROR] SearXNG API error: ${response.status} ${response.statusText}`, errorText);
+      
+      if (response.status === 429) {
+        throw new Error('SearXNG instance rate limit exceeded. Please try again later.');
+      } else if (response.status >= 500) {
+        throw new Error('SearXNG service is temporarily unavailable.');
+      } else if (response.status === 403) {
+        throw new Error('SearXNG access denied. Please check instance configuration.');
+      } else {
+        throw new Error(`SearXNG API error: ${response.status}`);
+      }
     }
 
     const data = await response.json();
