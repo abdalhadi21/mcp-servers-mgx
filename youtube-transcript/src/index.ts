@@ -12,8 +12,7 @@ import {
   CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
 import http, { IncomingMessage, ServerResponse } from 'http';
-// @ts-ignore
-import { getSubtitles } from 'youtube-captions-scraper';
+import { YoutubeTranscript } from 'youtube-transcript';
 
 // Define tool configurations
 const TOOLS: Tool[] = [
@@ -92,29 +91,37 @@ class YouTubeTranscriptExtractor {
    * Retrieves transcript for a given video ID and language
    */
   async getTranscript(videoId: string, lang: string): Promise<string> {
-    const languagesToTry = [lang, 'en', 'auto'];
-    
-    for (const langCode of languagesToTry) {
-      try {
-        console.error(`Trying language: ${langCode}`);
-        const transcript = await getSubtitles({
-          videoID: videoId,
-          lang: langCode,
-        });
+    try {
+      console.error(`Fetching transcript for video: ${videoId}`);
+      const transcript = await YoutubeTranscript.fetchTranscript(videoId, {
+        lang: lang || 'en'
+      });
 
-        if (transcript && transcript.length > 0) {
-          return this.formatTranscript(transcript);
-        }
-      } catch (error) {
-        console.error(`Failed to fetch transcript for ${langCode}:`, error);
-        // Continue to next language
+      if (transcript && transcript.length > 0) {
+        return this.formatYoutubeTranscript(transcript);
       }
+      
+      throw new Error('No transcript data returned');
+    } catch (error) {
+      console.error('Failed to fetch transcript:', error);
+      
+      // Try without language specification as fallback
+      try {
+        console.error(`Trying fallback without language specification`);
+        const transcript = await YoutubeTranscript.fetchTranscript(videoId);
+        
+        if (transcript && transcript.length > 0) {
+          return this.formatYoutubeTranscript(transcript);
+        }
+      } catch (fallbackError) {
+        console.error('Fallback also failed:', fallbackError);
+      }
+      
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Failed to retrieve transcript: ${(error as Error).message}`
+      );
     }
-    
-    throw new McpError(
-      ErrorCode.InternalError,
-      `Could not find captions for video: ${videoId}. Tried languages: ${languagesToTry.join(', ')}`
-    );
   }
 
   /**
@@ -123,6 +130,16 @@ class YouTubeTranscriptExtractor {
   private formatTranscript(transcript: TranscriptLine[]): string {
     return transcript
       .map(line => line.text.trim())
+      .filter(text => text.length > 0)
+      .join(' ');
+  }
+
+  /**
+   * Formats youtube-transcript package format into readable text
+   */
+  private formatYoutubeTranscript(transcript: any[]): string {
+    return transcript
+      .map(item => item.text?.trim() || '')
       .filter(text => text.length > 0)
       .join(' ');
   }
