@@ -157,6 +157,7 @@ export class YouTubeUtils {
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
+const RATE_LIMIT_DELAY = 5000; // 5 seconds for rate limit
 
 // Utility function for delay
 const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
@@ -225,16 +226,71 @@ export class YouTubeTranscriptFetcher {
       const html = await response.text();
 
       if (isRateLimitError(html)) {
-        throw new YouTubeTranscriptError(
-          'YouTube rate limit detected. This could be due to:\n' +
-          '1. Too many requests from your IP\n' +
-          '2. YouTube requiring CAPTCHA verification\n' +
-          '3. Regional restrictions\n' +
-          'Try:\n' +
-          '- Waiting a few minutes\n' +
-          '- Using a different IP address\n' +
-          '- Using a VPN service'
-        );
+        console.error('Rate limit detected, waiting before retry...');
+        await delay(RATE_LIMIT_DELAY);
+        
+        // Try one more time after rate limit delay
+        const retryResponse = await this.fetchWithRetry(`https://www.youtube.com/watch?v=${videoId}`, { headers }, 1);
+        const retryHtml = await retryResponse.text();
+        
+        if (isRateLimitError(retryHtml)) {
+          throw new YouTubeTranscriptError(
+            'YouTube rate limit detected. This could be due to:\n' +
+            '1. Too many requests from your IP\n' +
+            '2. YouTube requiring CAPTCHA verification\n' +
+            '3. Regional restrictions\n' +
+            'Try:\n' +
+            '- Waiting a few minutes\n' +
+            '- Using a different IP address\n' +
+            '- Using a VPN service'
+          );
+        }
+        
+        // Use the retry HTML if successful
+        const htmlToUse = retryHtml;
+        const splittedHTML = htmlToUse.split('"captions":');
+        
+        if (splittedHTML.length > 1) {
+          // Continue with processing using retryHtml
+          try {
+            const transcriptData = JSON.parse(splittedHTML[1].split(',"videoDetails')[0].replace('\n', ''));
+            const transcripts = transcriptData?.playerCaptionsTracklistRenderer;
+
+            if (!transcripts || !('captionTracks' in transcripts)) {
+              throw new YouTubeTranscriptError(`No transcripts available for video ${videoId}`);
+            }
+
+            const tracks = transcripts.captionTracks as CaptionTrack[];
+            if (lang && !tracks.some((track: CaptionTrack) => track.languageCode === lang)) {
+              const availableLangs = tracks.map((track: CaptionTrack) => track.languageCode);
+              throw new YouTubeTranscriptError(
+                `Language ${lang} not available for video ${videoId}. Available languages: ${availableLangs.join(', ')}`
+              );
+            }
+
+            const selectedTrack = lang
+              ? tracks.find((track: CaptionTrack) => track.languageCode === lang)
+              : tracks[0];
+
+            if (!selectedTrack) {
+              throw new YouTubeTranscriptError(`Could not find transcript track for video ${videoId}`);
+            }
+
+            // Fetch transcript content
+            const transcriptResponse = await this.fetchTranscriptContent(selectedTrack, lang);
+
+            return {
+              baseUrl: selectedTrack.baseUrl,
+              languageCode: selectedTrack.languageCode,
+              transcripts: transcriptResponse.transcripts.sort((a, b) => a.timestamp - b.timestamp)
+            };
+          } catch (error) {
+            if (error instanceof YouTubeTranscriptError) {
+              throw error;
+            }
+            throw new YouTubeTranscriptError(`Failed to parse transcript data: ${(error as Error).message}`);
+          }
+        }
       }
 
       // Debug log for development

@@ -11,8 +11,9 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
-    "noImplicitAny": false
+    "noImplicitAny": false,
+    "allowJs": true
   },
-  "include": ["src/index.ts"],
-  "exclude": ["node_modules", "src/evals"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "src/evals", "dist"]
 }
