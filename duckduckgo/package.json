@@ -21,7 +21,7 @@
     "build"
   ],
   "scripts": {
-    "build": "tsc && echo '#!/usr/bin/env node\n' | cat - build/index.js > temp && mv temp build/index.js && chmod +x build/index.js",
+    "build": "tsc && chmod +x build/index.js",
     "watch": "tsc --watch",
     "inspector": "npx @modelcontextprotocol/inspector build/index.js"
   },
