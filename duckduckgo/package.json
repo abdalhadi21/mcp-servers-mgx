@@ -1,0 +1,43 @@
+{
+  "name": "duckduckgo-mcp-server",
+  "version": "0.1.2",
+  "description": "A TypeScript-based MCP server that provides DuckDuckGo search functionality.",
+  "type": "module",
+  "author": {
+    "name": "zhsama",
+    "email": "torvalds@linux.do",
+    "url": "https://github.com/zhsama/duckduckgo-mcp-server"
+  },
+  "homepage": "https://github.com/zhsama/duckduckgo-mcp-server",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhsama/duckduckgo-mcp-server.git"
+  },
+  "license": "MIT",
+  "bin": {
+    "duckduckgo-mcp-server": "./build/index.js"
+  },
+  "files": [
+    "build"
+  ],
+  "scripts": {
+    "build": "tsc && echo '#!/usr/bin/env node\n' | cat - build/index.js > temp && mv temp build/index.js && chmod +x build/index.js",
+    "prepare": "pnpm run build",
+    "watch": "tsc --watch",
+    "inspector": "npx @modelcontextprotocol/inspector build/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "0.6.0",
+    "duck-duck-scrape": "2.2.7",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.24",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=8.0.0"
+  }
+}
