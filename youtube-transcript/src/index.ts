@@ -1,374 +1,131 @@
 #!/usr/bin/env node
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-  ErrorCode,
-  McpError,
-  Tool,
-  CallToolResult,
-} from "@modelcontextprotocol/sdk/types.js";
-import http, { IncomingMessage, ServerResponse } from 'http';
-import { YoutubeTranscript } from 'youtube-transcript';
-
-// Define tool configurations
-const TOOLS: Tool[] = [
-  {
-    name: "get_transcript",
-    description: "Extract transcript from a YouTube video URL or ID",
-    inputSchema: {
-      type: "object",
-      properties: {
-        url: {
-          type: "string",
-          description: "YouTube video URL or ID"
-        },
-        lang: {
-          type: "string",
-          description: "Language code for transcript (e.g., 'ko', 'en')",
-          default: "en"
-        }
-      },
-      required: ["url", "lang"]
-    }
-  }
-];
-
-interface TranscriptLine {
-  text: string;
-  start: number;
-  dur: number;
-}
+import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { YouTubeTranscriptFetcher, YouTubeUtils, YouTubeTranscriptError, TranscriptOptions, Transcript } from './youtube.js';
+import { z } from "zod";
 
 class YouTubeTranscriptExtractor {
   /**
    * Extracts YouTube video ID from various URL formats or direct ID input
    */
   extractYoutubeId(input: string): string {
-    if (!input) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'YouTube URL or ID is required'
-      );
-    }
+    return YouTubeTranscriptFetcher.extractVideoId(input);
+  }
 
-    // Handle URL formats
+  /**
+   * Retrieves transcripts for a given video ID and language
+   */
+  async getTranscripts({ videoID, lang }: TranscriptOptions): Promise<{ transcripts: Transcript[], title: string }> {
     try {
-      const url = new URL(input);
-      if (url.hostname === 'youtu.be') {
-        return url.pathname.slice(1);
-      } else if (url.hostname.includes('youtube.com')) {
-        const videoId = url.searchParams.get('v');
-        if (!videoId) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            `Invalid YouTube URL: ${input}`
-          );
-        }
-        return videoId;
+      const result = await YouTubeTranscriptFetcher.fetchTranscripts(videoID, { lang });
+      if (result.transcripts.length === 0) {
+        throw new YouTubeTranscriptError('No transcripts found');
       }
+      return result;
     } catch (error) {
-      // Not a URL, check if it's a direct video ID
-      if (!/^[a-zA-Z0-9_-]{11}$/.test(input)) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Invalid YouTube video ID: ${input}`
-        );
+      if (error instanceof YouTubeTranscriptError || error instanceof McpError) {
+        throw error;
       }
-      return input;
+      throw new YouTubeTranscriptError(`Failed to fetch transcripts: ${(error as Error).message}`);
     }
-
-    throw new McpError(
-      ErrorCode.InvalidParams,
-      `Could not extract video ID from: ${input}`
-    );
-  }
-
-  /**
-   * Retrieves transcript for a given video ID and language
-   */
-  async getTranscript(videoId: string, lang: string): Promise<string> {
-    try {
-      console.error(`Fetching transcript for video: ${videoId}`);
-      const transcript = await YoutubeTranscript.fetchTranscript(videoId, {
-        lang: lang || 'en'
-      });
-
-      if (transcript && transcript.length > 0) {
-        return this.formatYoutubeTranscript(transcript);
-      }
-      
-      throw new Error('No transcript data returned');
-    } catch (error) {
-      console.error('Failed to fetch transcript:', error);
-      
-      // Try without language specification as fallback
-      try {
-        console.error(`Trying fallback without language specification`);
-        const transcript = await YoutubeTranscript.fetchTranscript(videoId);
-        
-        if (transcript && transcript.length > 0) {
-          return this.formatYoutubeTranscript(transcript);
-        }
-      } catch (fallbackError) {
-        console.error('Fallback also failed:', fallbackError);
-      }
-      
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Failed to retrieve transcript: ${(error as Error).message}`
-      );
-    }
-  }
-
-  /**
-   * Formats transcript lines into readable text
-   */
-  private formatTranscript(transcript: TranscriptLine[]): string {
-    return transcript
-      .map(line => line.text.trim())
-      .filter(text => text.length > 0)
-      .join(' ');
-  }
-
-  /**
-   * Formats youtube-transcript package format into readable text
-   */
-  private formatYoutubeTranscript(transcript: any[]): string {
-    return transcript
-      .map(item => item.text?.trim() || '')
-      .filter(text => text.length > 0)
-      .join(' ');
   }
 }
 
 class TranscriptServer {
   private extractor: YouTubeTranscriptExtractor;
-  private server: Server;
+  private server: McpServer;
 
   constructor() {
     this.extractor = new YouTubeTranscriptExtractor();
-    this.server = new Server(
-      {
-        name: "mcp-servers-youtube-transcript",
-        version: "0.1.0",
-      },
-      {
-        capabilities: {
-          tools: {},
-        },
-      }
-    );
+    this.server = new McpServer({
+      name: "mcp-youtube-transcript",
+      version: "0.1.0",
+      description: "A server built on the Model Context Protocol (MCP) that enables direct downloading of YouTube video transcripts, supporting AI and video analysis workflows."
+    });
 
-    this.setupHandlers();
+    this.setupTools();
     this.setupErrorHandling();
   }
 
   private setupErrorHandling(): void {
-    this.server.onerror = (error: Error) => {
-      console.error("[MCP Error]", error);
-    };
-
     process.on('SIGINT', async () => {
       await this.stop();
       process.exit(0);
     });
   }
 
-  private setupHandlers(): void {
-    // List available tools
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: TOOLS
-    }));
-
-    // Handle tool calls
-    this.server.setRequestHandler(CallToolRequestSchema, async (request: any) => 
-      this.handleToolCall(request.params.name, request.params.arguments ?? {})
+  private setupTools(): void {
+    this.server.tool(
+      "get_transcripts",
+      `Extract and process transcripts from a YouTube video.\n\n**Parameters:**\n- \`url\` (string, required): YouTube video URL or ID.\n- \`lang\` (string, optional, default 'en'): Language code for transcripts (e.g. 'en', 'uk', 'ja', 'ru', 'zh').\n- \`enableParagraphs\` (boolean, optional, default false): Enable automatic paragraph breaks.\n\n**IMPORTANT:** If the user does *not* specify a language *code*, **DO NOT** include the \`lang\` parameter in the tool call. Do not guess the language or use parts of the user query as the language code.`,
+      {
+        url: z.string().describe("YouTube video URL or ID"),
+        lang: z.string().default("en").describe("Language code for transcripts, default 'en' (e.g. 'en', 'uk', 'ja', 'ru', 'zh')"),
+        enableParagraphs: z.boolean().default(false).describe("Enable automatic paragraph breaks, default `false`")
+      },
+      async (input) => {
+        try {
+          const videoId = this.extractor.extractYoutubeId(input.url);
+          console.error(`Processing transcripts for video: ${videoId}`);
+          
+          const { transcripts, title } = await this.extractor.getTranscripts({ 
+            videoID: videoId, 
+            lang: input.lang 
+          });
+          
+          // Format text with optional paragraph breaks
+          const formattedText = YouTubeUtils.formatTranscriptText(transcripts, {
+            enableParagraphs: input.enableParagraphs
+          });
+            
+          console.error(`Successfully extracted transcripts for "${title}" (${formattedText.length} chars)`);
+          
+          return {
+            content: [{
+              type: "text",
+              text: `# ${title}\n\n${formattedText}`,
+              metadata: {
+                videoId,
+                title,
+                language: input.lang,
+                timestamp: new Date().toISOString(),
+                charCount: formattedText.length,
+                transcriptCount: transcripts.length,
+                totalDuration: YouTubeUtils.calculateTotalDuration(transcripts),
+                paragraphsEnabled: input.enableParagraphs
+              }
+            }]
+          };
+        } catch (error) {
+          if (error instanceof YouTubeTranscriptError || error instanceof McpError) {
+            throw error;
+          }
+          throw new YouTubeTranscriptError(`Failed to process transcripts: ${(error as Error).message}`);
+        }
+      }
     );
   }
 
-  /**
-   * Handles tool call requests
-   */
-  private async handleToolCall(name: string, args: any): Promise<{ toolResult: CallToolResult }> {
-    switch (name) {
-      case "get_transcript": {
-        const { url: input, lang = "en" } = args;
-        
-        if (!input || typeof input !== 'string') {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            'URL parameter is required and must be a string'
-          );
-        }
-
-        if (lang && typeof lang !== 'string') {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            'Language code must be a string'
-          );
-        }
-        
-        try {
-          const videoId = this.extractor.extractYoutubeId(input);
-          console.error(`Processing transcript for video: ${videoId}`);
-          
-          const transcript = await this.extractor.getTranscript(videoId, lang);
-          console.error(`Successfully extracted transcript (${transcript.length} chars)`);
-          
-          return {
-            toolResult: {
-              content: [{
-                type: "text",
-                text: transcript,
-                metadata: {
-                  videoId,
-                  language: lang,
-                  timestamp: new Date().toISOString(),
-                  charCount: transcript.length
-                }
-              }],
-              isError: false
-            }
-          };
-        } catch (error) {
-          console.error('Transcript extraction failed:', error);
-          
-          if (error instanceof McpError) {
-            throw error;
-          }
-          
-          throw new McpError(
-            ErrorCode.InternalError,
-            `Failed to process transcript: ${(error as Error).message}`
-          );
-        }
-      }
-
-      default:
-        throw new McpError(
-          ErrorCode.MethodNotFound,
-          `Unknown tool: ${name}`
-        );
-    }
-  }
-
-  /**
-   * Starts the server
-   */
   async start(): Promise<void> {
-    if (process.env.MCP_TRANSPORT === 'sse') {
-      const port = parseInt(process.env.PORT || '3000');
-      
-      // Store transports by session ID
-      const transports: Record<string, SSEServerTransport> = {};
-      
-      const httpServer = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
-        // Add CORS headers for all requests
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-        if (req.method === 'OPTIONS') {
-          res.writeHead(200);
-          res.end();
-          return;
-        }
-
-        if (req.url === '/sse' && req.method === 'GET') {
-          try {
-            // Create SSE transport for legacy clients
-            const transport = new SSEServerTransport('/messages', res);
-            transports[transport.sessionId] = transport;
-            
-            res.on("close", () => {
-              delete transports[transport.sessionId];
-            });
-            
-            await this.server.connect(transport);
-          } catch (error) {
-            console.error('SSE connection error:', error);
-            res.writeHead(500, { 'Content-Type': 'text/plain' });
-            res.end('Internal Server Error');
-          }
-        } else if (req.url?.startsWith('/messages') && req.method === 'POST') {
-          try {
-            const url = new URL(req.url, `http://${req.headers.host}`);
-            const sessionId = url.searchParams.get('sessionId');
-            const transport = transports[sessionId || ''];
-            
-            if (transport) {
-              await transport.handlePostMessage(req, res);
-            } else {
-              res.writeHead(400, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({
-                jsonrpc: '2.0',
-                error: {
-                  code: -32000,
-                  message: 'No transport found for sessionId'
-                },
-                id: null
-              }));
-            }
-          } catch (error) {
-            console.error('Message handling error:', error);
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-              jsonrpc: '2.0',
-              error: {
-                code: -32603,
-                message: 'Internal server error'
-              },
-              id: null
-            }));
-          }
-        } else if (req.url === '/') {
-          res.writeHead(200, { 'Content-Type': 'text/plain' });
-          res.end('YouTube Transcript MCP Server\nSSE endpoint: /sse\nMessages endpoint: /messages');
-        } else {
-          res.writeHead(404, { 'Content-Type': 'text/plain' });
-          res.end('Not Found');
-        }
-      });
-      
-      httpServer.listen(port, () => {
-        console.error(`YouTube Transcript MCP Server running on SSE at port ${port}`);
-      });
-    } else {
-      const transport = new StdioServerTransport();
-      await this.server.connect(transport);
-      console.error("YouTube Transcript MCP Server running on stdio");
-    }
+    const transport = new StdioServerTransport();
+    await this.server.connect(transport);
   }
 
-  /**
-   * Stops the server
-   */
   async stop(): Promise<void> {
-    try {
-      await this.server.close();
-    } catch (error) {
-      console.error('Error while stopping server:', error);
-    }
+    await this.server.close();
   }
 }
 
-// Main execution
 async function main() {
-  const server = new TranscriptServer();
-  
   try {
+    const server = new TranscriptServer();
     await server.start();
   } catch (error) {
-    console.error("Server failed to start:", error);
+    console.error('Server error:', error);
     process.exit(1);
   }
 }
 
-main().catch((error) => {
-  console.error("Fatal server error:", error);
-  process.exit(1);
-});
+main();
