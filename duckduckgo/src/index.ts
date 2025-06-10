@@ -236,7 +236,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [WEB_SEARCH_TOOL],
 }));
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
+server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
   try {
     console.error(
       `[DEBUG] Received tool call request:`,
@@ -380,12 +380,12 @@ async function runServer() {
 }
 
 // 启动服务器并处理未捕获的错误
-process.on("uncaughtException", (error) => {
+process.on("uncaughtException", (error: Error) => {
   console.error("[FATAL] Uncaught exception:", error);
   process.exit(1);
 });
 
-process.on("unhandledRejection", (reason) => {
+process.on("unhandledRejection", (reason: any) => {
   console.error("[FATAL] Unhandled rejection:", reason);
   process.exit(1);
 });
