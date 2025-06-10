@@ -2,11 +2,18 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
+# Copy package files first
 COPY package*.json ./
+
+# Install all dependencies (including devDependencies for build)
+RUN npm install
+
+# Copy source files
 COPY tsconfig.json ./
 COPY src/ ./src/
 
-RUN npm install && npm run build
+# Build the project
+RUN npm run build
 
 FROM node:22-alpine AS runtime
 

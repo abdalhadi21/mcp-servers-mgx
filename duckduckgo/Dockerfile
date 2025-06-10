@@ -2,13 +2,21 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml ./
+# Install pnpm
 RUN npm install -g pnpm
 
+# Copy package files
+COPY package.json pnpm-lock.yaml ./
+
+# Install all dependencies (including devDependencies for build)
+RUN pnpm install
+
+# Copy source files
 COPY tsconfig.json ./
 COPY src/ ./src/
 
-RUN pnpm install && pnpm run build
+# Build the project
+RUN pnpm run build
 
 FROM node:22-alpine AS runtime
 
