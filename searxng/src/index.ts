@@ -49,7 +49,7 @@ const CONFIG = {
     version: packageJson.version,
   },
   searxng: {
-    baseUrl: process.env.SEARXNG_BASE_URL || 'https://searxng-web-mgx.selfstack.space',
+    baseUrl: process.env.SEARXNG_BASE_URL || 'https://VTM2KCSv7OThTLoGfy9H6jn0Z0FUGPl6.selfstack.space',
     timeout: parseInt(process.env.SEARXNG_TIMEOUT || '15000'),
   },
   rateLimit: {
