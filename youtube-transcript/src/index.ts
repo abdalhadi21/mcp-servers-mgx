@@ -2,6 +2,7 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -10,6 +11,7 @@ import {
   Tool,
   CallToolResult,
 } from "@modelcontextprotocol/sdk/types.js";
+import http, { IncomingMessage, ServerResponse } from 'http';
 // @ts-ignore
 import { getSubtitles } from 'youtube-captions-scraper';
 
@@ -140,7 +142,7 @@ class TranscriptServer {
   }
 
   private setupErrorHandling(): void {
-    this.server.onerror = (error) => {
+    this.server.onerror = (error: Error) => {
       console.error("[MCP Error]", error);
     };
 
@@ -157,7 +159,7 @@ class TranscriptServer {
     }));
 
     // Handle tool calls
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => 
+    this.server.setRequestHandler(CallToolRequestSchema, async (request: any) => 
       this.handleToolCall(request.params.name, request.params.arguments ?? {})
     );
   }
