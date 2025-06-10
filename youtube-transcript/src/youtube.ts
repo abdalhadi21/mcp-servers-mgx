@@ -13,6 +13,17 @@ export interface TranscriptOptions {
   lang?: string;    // Language code, default 'en'
 }
 
+interface TranscriptFormatOptions {
+  enableParagraphs?: boolean;
+  timeGapThreshold?: number;
+  maxSentencesPerParagraph?: number;
+}
+
+interface CaptionTrack {
+  languageCode: string;
+  baseUrl: string;
+}
+
 // Constants
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
 const ADDITIONAL_HEADERS = {
@@ -33,7 +44,7 @@ export class YouTubeUtils {
   /**
    * Format time (convert seconds to readable format)
    */
-  static formatTime(seconds) {
+  static formatTime(seconds: number): string {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
@@ -45,14 +56,14 @@ export class YouTubeUtils {
   /**
    * Calculate total duration in seconds
    */
-  static calculateTotalDuration(items) {
+  static calculateTotalDuration(items: Transcript[]): number {
     return items.reduce((acc, item) => Math.max(acc, item.timestamp + item.duration), 0);
   }
 
   /**
    * Decode HTML entities
    */
-  static decodeHTML(text) {
+  static decodeHTML(text: string): string {
     const entities = {
       '&amp;': '&',
       '&lt;': '<',
@@ -74,7 +85,7 @@ export class YouTubeUtils {
   /**
    * Normalize text formatting (punctuation and spaces)
    */
-  static normalizeText(text) {
+  static normalizeText(text: string): string {
     return text
       .replace(/\n/g, ' ')
       .replace(/\s*\.\s*\.\s*/g, '. ') // Fix multiple dots
@@ -90,9 +101,9 @@ export class YouTubeUtils {
    * Format transcript text with optional paragraph breaks
    */
   static formatTranscriptText(
-    transcripts,
-    options = {}
-  ) {
+    transcripts: Transcript[],
+    options: TranscriptFormatOptions = {}
+  ): string {
     const {
       enableParagraphs = false,
       timeGapThreshold = 2,
@@ -148,10 +159,10 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
 
 // Utility function for delay
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
 // Rate limit error detection
-const isRateLimitError = (html) => {
+const isRateLimitError = (html: string): boolean => {
   return html.includes('class="g-recaptcha"') || 
          html.includes('sorry/index') ||
          html.includes('consent.youtube.com');
@@ -162,7 +173,7 @@ export class YouTubeTranscriptFetcher {
   /**
    * Fetch video title using oEmbed API
    */
-  static async fetchVideoTitle(videoId) {
+  static async fetchVideoTitle(videoId: string): Promise<string> {
     try {
       const response = await fetch(
         `https://www.youtube.com/oembed?url=http://www.youtube.com/watch?v=${videoId}&format=json`
@@ -179,10 +190,10 @@ export class YouTubeTranscriptFetcher {
   }
 
   static async fetchWithRetry(
-    url, 
-    options,
-    retries = MAX_RETRIES
-  ) {
+    url: string, 
+    options: RequestInit,
+    retries: number = MAX_RETRIES
+  ): Promise<Response> {
     try {
       const response = await fetch(url, options);
       if (!response.ok) {
@@ -202,7 +213,7 @@ export class YouTubeTranscriptFetcher {
   /**
    * Fetch transcript configuration and content from YouTube video page
    */
-  static async fetchTranscriptConfigAndContent(videoId, lang) {
+  static async fetchTranscriptConfigAndContent(videoId: string, lang?: string): Promise<{ baseUrl: string, languageCode: string, transcripts: Transcript[] }> {
     const headers = {
       ...ADDITIONAL_HEADERS,
       ...(lang && { 'Accept-Language': lang }),
@@ -314,9 +325,9 @@ export class YouTubeTranscriptFetcher {
    * Helper method to fetch transcript content
    */
   static async fetchTranscriptContent(
-    track,
-    lang
-  ) {
+    track: CaptionTrack,
+    lang?: string
+  ): Promise<{ baseUrl: string; languageCode: string; transcripts: Transcript[] }> {
     const headers = {
       ...ADDITIONAL_HEADERS,
       ...(lang && { 'Accept-Language': lang }),
@@ -365,7 +376,7 @@ export class YouTubeTranscriptFetcher {
   /**
    * Extract video ID from YouTube URL or direct ID input
    */
-  static extractVideoId(input) {
+  static extractVideoId(input: string): string {
     if (!input) {
       throw new McpError(
         ErrorCode.InvalidParams,
@@ -414,7 +425,7 @@ export class YouTubeTranscriptFetcher {
   /**
    * Fetch transcripts and video information
    */
-  static async fetchTranscripts(videoId, config) {
+  static async fetchTranscripts(videoId: string, config?: { lang?: string }): Promise<{ transcripts: Transcript[], title: string }> {
     try {
       const identifier = this.extractVideoId(videoId);
       const [{ transcripts }, title] = await Promise.all([

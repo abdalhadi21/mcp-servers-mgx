@@ -1,10 +1,44 @@
 #!/usr/bin/env node
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { 
+  CallToolRequestSchema, 
+  ListToolsRequestSchema,
+  McpError,
+  ErrorCode,
+  Tool,
+  CallToolResult
+} from "@modelcontextprotocol/sdk/types.js";
 import { YouTubeTranscriptFetcher, YouTubeUtils, YouTubeTranscriptError, TranscriptOptions, Transcript } from './youtube.js';
-import { z } from "zod";
+
+// Define tool configurations
+const TOOLS: Tool[] = [
+  {
+    name: "get_transcript",
+    description: "Extract transcript from a YouTube video URL or ID",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: {
+          type: "string",
+          description: "YouTube video URL or ID"
+        },
+        lang: {
+          type: "string",
+          description: "Language code for transcript (e.g., 'ko', 'en')",
+          default: "en"
+        },
+        enableParagraphs: {
+          type: "boolean",
+          description: "Enable automatic paragraph breaks",
+          default: false
+        }
+      },
+      required: ["url"]
+    }
+  }
+];
 
 class YouTubeTranscriptExtractor {
   /**
@@ -35,97 +69,162 @@ class YouTubeTranscriptExtractor {
 
 class TranscriptServer {
   private extractor: YouTubeTranscriptExtractor;
-  private server: McpServer;
+  private server: Server;
 
   constructor() {
     this.extractor = new YouTubeTranscriptExtractor();
-    this.server = new McpServer({
-      name: "mcp-youtube-transcript",
-      version: "0.1.0",
-      description: "A server built on the Model Context Protocol (MCP) that enables direct downloading of YouTube video transcripts, supporting AI and video analysis workflows."
-    });
+    this.server = new Server(
+      {
+        name: "mcp-servers-youtube-transcript",
+        version: "0.1.0",
+      },
+      {
+        capabilities: {
+          tools: {},
+        },
+      }
+    );
 
-    this.setupTools();
+    this.setupHandlers();
     this.setupErrorHandling();
   }
 
   private setupErrorHandling(): void {
+    this.server.onerror = (error: Error) => {
+      console.error("[MCP Error]", error);
+    };
+
     process.on('SIGINT', async () => {
       await this.stop();
       process.exit(0);
     });
   }
 
-  private setupTools(): void {
-    this.server.tool(
-      "get_transcripts",
-      `Extract and process transcripts from a YouTube video.\n\n**Parameters:**\n- \`url\` (string, required): YouTube video URL or ID.\n- \`lang\` (string, optional, default 'en'): Language code for transcripts (e.g. 'en', 'uk', 'ja', 'ru', 'zh').\n- \`enableParagraphs\` (boolean, optional, default false): Enable automatic paragraph breaks.\n\n**IMPORTANT:** If the user does *not* specify a language *code*, **DO NOT** include the \`lang\` parameter in the tool call. Do not guess the language or use parts of the user query as the language code.`,
-      {
-        url: z.string().describe("YouTube video URL or ID"),
-        lang: z.string().default("en").describe("Language code for transcripts, default 'en' (e.g. 'en', 'uk', 'ja', 'ru', 'zh')"),
-        enableParagraphs: z.boolean().default(false).describe("Enable automatic paragraph breaks, default `false`")
-      },
-      async (input) => {
+  private setupHandlers(): void {
+    // List available tools
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: TOOLS
+    }));
+
+    // Handle tool calls
+    this.server.setRequestHandler(CallToolRequestSchema, async (request: any) => 
+      this.handleToolCall(request.params.name, request.params.arguments ?? {})
+    );
+  }
+
+  /**
+   * Handles tool call requests
+   */
+  private async handleToolCall(name: string, args: any): Promise<{ toolResult: CallToolResult }> {
+    switch (name) {
+      case "get_transcript": {
+        const { url: input, lang = "en", enableParagraphs = false } = args;
+        
+        if (!input || typeof input !== 'string') {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            'URL parameter is required and must be a string'
+          );
+        }
+
+        if (lang && typeof lang !== 'string') {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            'Language code must be a string'
+          );
+        }
+        
         try {
-          const videoId = this.extractor.extractYoutubeId(input.url);
-          console.error(`Processing transcripts for video: ${videoId}`);
+          const videoId = this.extractor.extractYoutubeId(input);
+          console.error(`Processing transcript for video: ${videoId}`);
           
           const { transcripts, title } = await this.extractor.getTranscripts({ 
             videoID: videoId, 
-            lang: input.lang 
+            lang: lang 
           });
           
           // Format text with optional paragraph breaks
           const formattedText = YouTubeUtils.formatTranscriptText(transcripts, {
-            enableParagraphs: input.enableParagraphs
+            enableParagraphs: enableParagraphs
           });
-            
-          console.error(`Successfully extracted transcripts for "${title}" (${formattedText.length} chars)`);
+          
+          console.error(`Successfully extracted transcript (${formattedText.length} chars)`);
           
           return {
-            content: [{
-              type: "text",
-              text: `# ${title}\n\n${formattedText}`,
-              metadata: {
-                videoId,
-                title,
-                language: input.lang,
-                timestamp: new Date().toISOString(),
-                charCount: formattedText.length,
-                transcriptCount: transcripts.length,
-                totalDuration: YouTubeUtils.calculateTotalDuration(transcripts),
-                paragraphsEnabled: input.enableParagraphs
-              }
-            }]
+            toolResult: {
+              content: [{
+                type: "text",
+                text: `# ${title}\n\n${formattedText}`,
+                metadata: {
+                  videoId,
+                  title,
+                  language: lang,
+                  timestamp: new Date().toISOString(),
+                  charCount: formattedText.length,
+                  transcriptCount: transcripts.length,
+                  totalDuration: YouTubeUtils.calculateTotalDuration(transcripts),
+                  paragraphsEnabled: enableParagraphs
+                }
+              }],
+              isError: false
+            }
           };
         } catch (error) {
-          if (error instanceof YouTubeTranscriptError || error instanceof McpError) {
+          console.error('Transcript extraction failed:', error);
+          
+          if (error instanceof McpError) {
             throw error;
           }
-          throw new YouTubeTranscriptError(`Failed to process transcripts: ${(error as Error).message}`);
+          
+          throw new McpError(
+            ErrorCode.InternalError,
+            `Failed to process transcript: ${(error as Error).message}`
+          );
         }
       }
-    );
+
+      default:
+        throw new McpError(
+          ErrorCode.MethodNotFound,
+          `Unknown tool: ${name}`
+        );
+    }
   }
 
+  /**
+   * Starts the server
+   */
   async start(): Promise<void> {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
+    console.error("YouTube Transcript MCP Server running on stdio");
   }
 
+  /**
+   * Stops the server
+   */
   async stop(): Promise<void> {
-    await this.server.close();
+    try {
+      await this.server.close();
+    } catch (error) {
+      console.error('Error while stopping server:', error);
+    }
   }
 }
 
+// Main execution
 async function main() {
+  const server = new TranscriptServer();
+  
   try {
-    const server = new TranscriptServer();
     await server.start();
   } catch (error) {
-    console.error('Server error:', error);
+    console.error("Server failed to start:", error);
     process.exit(1);
   }
 }
 
-main();
+main().catch((error) => {
+  console.error("Fatal server error:", error);
+  process.exit(1);
+});
